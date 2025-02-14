@@ -2,7 +2,7 @@ pb_data
 pb_public
 
 *.exe
-photo-cifu
+pocketbase-experiments
 /build
 
 *.sqlite
