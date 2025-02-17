@@ -10,6 +10,7 @@ import (
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/shujink0/pocketbase-experiments/ui"
 
 	"github.com/pquerna/otp/totp"
 
@@ -31,9 +32,20 @@ func main() {
 
 	app := pocketbase.New()
 
+	var indexFallback bool
+	app.RootCmd.PersistentFlags().BoolVar(
+		&indexFallback,
+		"indexFallback",
+		true,
+		"fallback the request to index.html on missing static path, e.g. when pretty urls are used with SPA",
+	)
+
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
-		// serves static files from the provided public dir (if exists)
-		se.Router.GET("/{path...}", apis.Static(os.DirFS("./pb_public"), false))
+
+		if !se.Router.HasRoute(http.MethodGet, "/{path...}") {
+			se.Router.GET("/{path...}", apis.Static(ui.DistDirFS, indexFallback)).
+				Bind(apis.Gzip())
+		}
 
 		se.Router.GET("/api/pb-experiments/get-qr", func(e *core.RequestEvent) error {
 
@@ -78,20 +90,31 @@ func main() {
 				return e.BadRequestError("Failed to read request data", err)
 			}
 
-			if data.UserId == "" {
-				return e.BadRequestError("userId required", nil)
+			if data.MfaId == "" {
+				return e.BadRequestError("mfaId required", nil)
 			}
 
 			if data.Passcode == "" {
 				return e.BadRequestError("passcode required", nil)
 			}
 
-			record, err := app.FindRecordById("users", data.UserId)
+			record, err := app.FindRecordById("_mfas", data.MfaId)
 			if err != nil {
-				return e.BadRequestError("User not found", err)
+				return e.BadRequestError("Mfa not found", err)
 			}
 
-			secret := record.GetString("totpSecret")
+			userId := record.GetString("recordRef")
+
+			if userId == "" {
+				return e.BadRequestError("Column not found", err)
+			}
+
+			userRecord, err := app.FindRecordById("users", userId)
+			if err != nil {
+				return e.BadRequestError("Mfa not found", err)
+			}
+
+			secret := userRecord.GetString("totpSecret")
 
 			if secret == "" {
 				return e.BadRequestError("Secret not found", err)
@@ -102,7 +125,7 @@ func main() {
 				return e.UnauthorizedError("Invalid passcode", err)
 			}
 
-			return apis.RecordAuthResponse(e, record, "totp", nil)
+			return apis.RecordAuthResponse(e, userRecord, "totp", nil)
 		})
 
 		return se.Next()
@@ -114,6 +137,6 @@ func main() {
 }
 
 type UserTotp struct {
-	UserId   string `json:"userId" form:"userId"`
+	MfaId    string `json:"mfaId" form:"mfaId"`
 	Passcode string `json:"passcode" form:"passcode"`
 }
