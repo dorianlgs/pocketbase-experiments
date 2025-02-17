@@ -49,7 +49,14 @@ func main() {
 
 		se.Router.GET("/api/pb-experiments/get-qr", func(e *core.RequestEvent) error {
 
-			record, err := app.FindRecordById("users", "a7d90iil825ptia")
+			info, err := e.RequestInfo()
+			userId := info.Query["userId"]
+
+			if userId == "" {
+				return e.BadRequestError("userId required", nil)
+			}
+
+			record, err := app.FindRecordById("users", userId)
 			if err != nil {
 				return err
 			}

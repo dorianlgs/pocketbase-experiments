@@ -46,6 +46,10 @@
         goto("/account");
       }
     } catch (err: any) {
+      if (err.status === 400) {
+        errors["emailCode"] = "Invalid email code";
+      }
+
       loading = false;
     }
   };

@@ -48,6 +48,12 @@
         const mfaId = err.response?.mfaId;
 
         if (mfaId) {
+          //const result = await pb.collection("users").requestOTP(email);
+
+          // if (result.otpId) {
+          //  goto(`/login/otp_input?otpId=${result.otpId}&mfaId=${mfaId}`);
+          //}
+
           goto(`/login/totp?mfaId=${mfaId}`);
         }
 

@@ -50,6 +50,10 @@
         }
       }
     } catch (err: any) {
+      if (err.status === 401) {
+        errors["totpCode"] = "Invalid code";
+      }
+
       loading = false;
     }
   };
