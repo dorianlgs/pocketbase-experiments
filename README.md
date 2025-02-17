@@ -16,10 +16,8 @@ go run . serve
 ## Build to publish
 
 ```bash
-$env:GOOS = "linux"
 go generate ./...
-go build -ldflags "-s -w"
-
+GOOS=linux GOARCH=amd64 go build
 ./pocketbase-experiments serve
 ```
 
