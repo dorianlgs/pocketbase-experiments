@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
@@ -52,6 +53,13 @@ func main() {
 			info, err := e.RequestInfo()
 			userId := info.Query["userId"]
 
+			str_regenerate := info.Query["regenerate"]
+
+			regenerate, err := strconv.ParseBool(str_regenerate)
+			if err != nil {
+				return e.BadRequestError("regenerate not bool", nil)
+			}
+
 			if userId == "" {
 				return e.BadRequestError("userId required", nil)
 			}
@@ -61,19 +69,28 @@ func main() {
 				return err
 			}
 
-			key, err := totp.Generate(totp.GenerateOpts{
+			opts := totp.GenerateOpts{
 				Issuer:      totpIssuer,
 				AccountName: record.Email(),
-			})
+			}
+
+			if !regenerate {
+				opts.Secret = []byte(record.GetString("totpSecret"))
+			}
+
+			key, err := totp.Generate(opts)
 			if err != nil {
 				return e.BadRequestError("Error generating otp", err)
 			}
 
-			record.Set("totpSecret", key.Secret())
+			if regenerate {
+				record.Set("totpSecret", key.Secret())
+				record.Set("multiFactorAuth", true)
 
-			err = app.Save(record)
-			if err != nil {
-				return e.BadRequestError("Error saving otp secret", err)
+				err = app.Save(record)
+				if err != nil {
+					return e.BadRequestError("Error saving otp secret", err)
+				}
 			}
 
 			var buf bytes.Buffer
@@ -89,7 +106,7 @@ func main() {
 			}
 
 			return e.Blob(http.StatusOK, "image/png", buf.Bytes())
-		})
+		}).Bind(apis.RequireAuth())
 
 		se.Router.POST("/api/pb-experiments/totp-login", func(e *core.RequestEvent) error {
 			data := UserTotp{}
