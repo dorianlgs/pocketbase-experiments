@@ -69,6 +69,11 @@ func main() {
 				return err
 			}
 
+			canAccess, err := e.App.CanAccessRecord(record, info, record.Collection().ViewRule)
+			if !canAccess {
+				return e.ForbiddenError("", err)
+			}
+
 			opts := totp.GenerateOpts{
 				Issuer:      totpIssuer,
 				AccountName: record.Email(),
