@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base32"
 	"image/png"
 	"log"
 	"net/http"
@@ -80,7 +81,11 @@ func main() {
 			}
 
 			if !regenerate {
-				opts.Secret = []byte(record.GetString("totpSecret"))
+				secretBytes, err := base32.StdEncoding.DecodeString(record.GetString("totpSecret"))
+				if err != nil {
+					return e.BadRequestError("Error decoding totp secret", err)
+				}
+				opts.Secret = secretBytes
 			}
 
 			key, err := totp.Generate(opts)
