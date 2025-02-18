@@ -3,12 +3,18 @@ package main
 import (
 	"bytes"
 	"encoding/base32"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"image/png"
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
+	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -17,6 +23,15 @@ import (
 	"github.com/pquerna/otp/totp"
 
 	"github.com/joho/godotenv"
+)
+
+var (
+	webAuthn *webauthn.WebAuthn
+	err      error
+
+	datastore PasskeyStore
+	//sessions  SessionStore
+	l Logger
 )
 
 func main() {
@@ -41,6 +56,25 @@ func main() {
 		true,
 		"fallback the request to index.html on missing static path, e.g. when pretty urls are used with SPA",
 	)
+
+	proto := os.Getenv("PROTO")
+	host := os.Getenv("HOST")
+	port := os.Getenv("PORT")
+	origin := fmt.Sprintf("%s://%s%s", proto, host, port)
+
+	wconfig := &webauthn.Config{
+		RPDisplayName: "PB Expetiments WebAuthn", // Display Name for your site
+		RPID:          host,                      // Generally the FQDN for your site
+		RPOrigins:     []string{origin},          // The origin URLs allowed for WebAuthn
+	}
+
+	if webAuthn, err = webauthn.New(wconfig); err != nil {
+		fmt.Printf("[FATA] %s", err.Error())
+		os.Exit(1)
+	}
+
+	l = log.Default()
+	datastore = NewInMem(l)
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 
@@ -162,6 +196,174 @@ func main() {
 			return apis.RecordAuthResponse(e, userRecord, "totp", nil)
 		})
 
+		se.Router.POST("/api/pb-experiments/passkey/registerStart", func(e *core.RequestEvent) error {
+
+			app.Logger().Info("begin registration ----------------------\\")
+
+			username, err := getUsername(e)
+			if err != nil {
+				return e.BadRequestError("[ERRO] can't get user name: %s", err.Error())
+			}
+
+			user := datastore.GetOrCreateUser(username)
+
+			options, session, err := webAuthn.BeginRegistration(user)
+			if err != nil {
+				return e.BadRequestError("can't begin registration: %s", err.Error())
+			}
+
+			t, err := datastore.GenSessionID()
+			if err != nil {
+				return e.BadRequestError("[ERRO] can't generate session id: %s", err.Error())
+			}
+
+			datastore.SaveSession(t, *session)
+
+			e.Response.Header().Set("Session-Key", t)
+
+			return e.JSON(http.StatusOK, options)
+		})
+
+		se.Router.POST("/api/pb-experiments/passkey/registerFinish", func(e *core.RequestEvent) error {
+
+			sid := e.Request.Header.Get("Session-Key")
+			if err != nil {
+				return e.BadRequestError("[ERRO] can't get session id: %s", err.Error())
+			}
+
+			app.Logger().Info("sid %s ----------------------/", "sid", sid)
+
+			session, ok := datastore.GetSession(sid)
+
+			if !ok {
+				return e.BadRequestError("[ERRO] can't get session id: %s from datastore", err.Error())
+			}
+
+			user := datastore.GetOrCreateUser(string(session.UserID))
+
+			app.Logger().Info("user %s ----------------------/", "user", user.WebAuthnDisplayName())
+
+			var ccr CredentialCreationResponse
+
+			if err := e.BindBody(&ccr); err != nil {
+				return e.BadRequestError("Failed to read request data", err)
+			}
+
+			app.Logger().Info("rawId %s ----------------------/", "rawId", ccr.PublicKeyCredential.RawID)
+
+			credential, err := webAuthn.FinishRegistration(user, session, e.Request)
+			if err != nil {
+				msg := fmt.Sprintf("can't finish registration: %s", err.Error())
+
+				e.SetCookie(&http.Cookie{
+					Name:  "sid",
+					Value: "",
+				})
+				return e.BadRequestError(msg, err.Error())
+			}
+
+			user.AddCredential(credential)
+			datastore.SaveUser(user)
+
+			datastore.DeleteSession(sid)
+			e.SetCookie(&http.Cookie{
+				Name:  "sid",
+				Value: "",
+			})
+
+			app.Logger().Info("finish registration ----------------------/")
+			return e.JSON(http.StatusOK, "Registration Success")
+		})
+
+		se.Router.POST("/api/pb-experiments/passkey/loginStart", func(e *core.RequestEvent) error {
+			l.Printf("[INFO] begin login ----------------------\\")
+
+			username, err := getUsername(e)
+			if err != nil {
+				l.Printf("[ERRO]can't get user name: %s", err.Error())
+				panic(err)
+			}
+
+			user := datastore.GetOrCreateUser(username) // Find the user
+
+			options, session, err := webAuthn.BeginLogin(user)
+			if err != nil {
+				msg := fmt.Sprintf("can't begin login: %s", err.Error())
+				l.Printf("[ERRO] %s", msg)
+				return e.BadRequestError(msg, err.Error())
+			}
+
+			// Make a session key and store the sessionData values
+			t, err := datastore.GenSessionID()
+			if err != nil {
+				return e.BadRequestError("[ERRO] can't generate session id: %s", err.Error())
+			}
+			datastore.SaveSession(t, *session)
+
+			e.Response.Header().Set("Login-Key", t)
+			return e.JSON(http.StatusOK, options)
+		})
+
+		se.Router.POST("/api/pb-experiments/passkey/loginFinish", func(e *core.RequestEvent) error {
+			// Get the session key from cookie
+			sid := e.Request.Header.Get("Login-Key")
+			if err != nil {
+				return e.BadRequestError("[ERRO] can't get session id: %s", err.Error())
+			}
+			// Get the session data stored from the function above
+			session, _ := datastore.GetSession(sid) // FIXME: cover invalid session
+
+			// In out example username == userID, but in real world it should be different
+			user := datastore.GetOrCreateUser(string(session.UserID)) // Get the user
+
+			var ccr CredentialCreationResponse
+
+			if err := e.BindBody(&ccr); err != nil {
+				return e.BadRequestError("Failed to read request data", err)
+			}
+
+			app.Logger().Info("rawId %s ----------------------/", "rawId", ccr.PublicKeyCredential.RawID)
+
+			credential, err := webAuthn.FinishLogin(user, session, e.Request)
+			if err != nil {
+				return e.BadRequestError("[ERRO] can't finish login: %s", err.Error())
+			}
+
+			// Handle credential.Authenticator.CloneWarning
+			if credential.Authenticator.CloneWarning {
+				l.Printf("[WARN] can't finish login: %s", "CloneWarning")
+			}
+
+			// If login was successful, update the credential object
+			user.UpdateCredential(credential)
+			datastore.SaveUser(user)
+
+			// Delete the login session data
+			datastore.DeleteSession(sid)
+
+			// Add the new session cookie
+			t, err := datastore.GenSessionID()
+			if err != nil {
+				l.Printf("[ERRO] can't generate session id: %s", err.Error())
+
+				return e.BadRequestError("[ERRO] can't generate session id: %s", err.Error())
+			}
+
+			datastore.SaveSession(t, webauthn.SessionData{
+				Expires: time.Now().Add(time.Hour),
+			})
+			e.Response.Header().Set("Login-Key", t)
+
+			l.Printf("[INFO] finish login ----------------------/")
+
+			userRecord, err := app.FindRecordById("users", "a7d90iil825ptia")
+			if err != nil {
+				return e.BadRequestError("Mfa not found", err)
+			}
+
+			return apis.RecordAuthResponse(e, userRecord, "passkeys", nil)
+		})
+
 		return se.Next()
 	})
 
@@ -173,4 +375,96 @@ func main() {
 type UserTotp struct {
 	MfaId    string `json:"mfaId" form:"mfaId"`
 	Passcode string `json:"passcode" form:"passcode"`
+}
+
+type Logger interface {
+	Printf(format string, v ...interface{})
+}
+
+type PasskeyUser interface {
+	webauthn.User
+	AddCredential(*webauthn.Credential)
+	UpdateCredential(*webauthn.Credential)
+}
+
+type PasskeyStore interface {
+	GetOrCreateUser(userName string) PasskeyUser
+	SaveUser(PasskeyUser)
+	GenSessionID() (string, error)
+	GetSession(token string) (webauthn.SessionData, bool)
+	SaveSession(token string, data webauthn.SessionData)
+	DeleteSession(token string)
+}
+
+// JSONResponse is a helper function to send json response
+func JSONResponse(w http.ResponseWriter, data interface{}, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(data)
+}
+
+// getUsername is a helper function to extract the username from json request
+func getUsername(e *core.RequestEvent) (string, error) {
+	type Username struct {
+		Username string `json:"username"`
+	}
+
+	var u Username
+	if err := e.BindBody(&u); err != nil {
+		return "", e.BadRequestError("Failed to read request data", err)
+	}
+
+	return u.Username, nil
+
+}
+
+type CredentialCreationResponse struct {
+	PublicKeyCredential
+}
+
+type PublicKeyCredential struct {
+	RawID URLEncodedBase64 `json:"rawId"`
+}
+
+type URLEncodedBase64 []byte
+
+func (e URLEncodedBase64) String() string {
+	return base64.RawURLEncoding.EncodeToString(e)
+}
+
+// UnmarshalJSON base64 decodes a URL-encoded value, storing the result in the
+// provided byte slice.
+func (e *URLEncodedBase64) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(data, []byte("null")) {
+		return nil
+	}
+
+	// TODO: Investigate this line. It is commented as trimming the leading spaces but appears to trim the leading and trailing double quotes instead.
+	// Trim the leading spaces.
+	data = bytes.Trim(data, "\"")
+
+	// Trim the trailing equal characters.
+	data = bytes.TrimRight(data, "=")
+
+	out := make([]byte, base64.RawURLEncoding.DecodedLen(len(data)))
+
+	n, err := base64.RawURLEncoding.Decode(out, data)
+	if err != nil {
+		return err
+	}
+
+	v := reflect.ValueOf(e).Elem()
+	v.SetBytes(out[:n])
+
+	return nil
+}
+
+// MarshalJSON base64 encodes a non URL-encoded value, storing the result in the
+// provided byte slice.
+func (e URLEncodedBase64) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return []byte("null"), nil
+	}
+
+	return []byte(`"` + base64.RawURLEncoding.EncodeToString(e) + `"`), nil
 }
