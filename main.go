@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/joho/godotenv"
@@ -35,12 +36,20 @@ var (
 
 func main() {
 
-	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
-	if err != nil {
-		log.Fatal(err)
+	isDevEnv := strings.HasPrefix(os.Args[0], os.TempDir())
+
+	if isDevEnv {
+		err = godotenv.Load()
+	} else {
+		dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+		if err != nil {
+			log.Fatal(err)
+		}
+		environmentPath := filepath.Join(dir, ".env.production")
+
+		fmt.Println(environmentPath)
+		err = godotenv.Load(environmentPath)
 	}
-	environmentPath := filepath.Join(dir, ".env")
-	err = godotenv.Load(environmentPath)
 
 	totpIssuer := os.Getenv("TOTP_ISSUER")
 
@@ -60,8 +69,15 @@ func main() {
 
 	proto := os.Getenv("PROTO")
 	host := os.Getenv("HOST")
-	port := os.Getenv("PORT")
-	origin := fmt.Sprintf("%s://%s%s", proto, host, port)
+
+	var origin string
+
+	if isDevEnv {
+		port := os.Getenv("PORT")
+		origin = fmt.Sprintf("%s://%s%s", proto, host, port)
+	} else {
+		origin = fmt.Sprintf("%s://%s", proto, host)
+	}
 
 	wconfig := &webauthn.Config{
 		RPDisplayName: "PB Expetiments WebAuthn", // Display Name for your site

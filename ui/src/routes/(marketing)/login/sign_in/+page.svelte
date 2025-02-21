@@ -6,7 +6,7 @@
   import GitHubButton from "$lib/components/GitHubButton.svelte";
   import { onMount } from "svelte";
   import GoogleButton from "$lib/components/GoogleButton.svelte";
-  import PasskeysButton from "$lib/components/PasskeysButton.svelte";
+  import PasskeyButton from "$lib/components/PasskeyButton.svelte";
 
   let errors: { [fieldName: string]: string } = $state({});
   let loading = $state(false);
@@ -153,7 +153,7 @@
 <br />
 <hr class="solid" />
 <br />
-<PasskeysButton isSignUp={false} />
+<PasskeyButton isSignUp={false} />
 <br />
 <hr class="solid" />
 <br />

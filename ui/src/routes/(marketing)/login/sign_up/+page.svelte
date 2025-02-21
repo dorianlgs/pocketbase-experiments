@@ -2,7 +2,7 @@
   import { pb } from "$lib/pocketbase";
   import GitHubButton from "$lib/components/GitHubButton.svelte";
   import GoogleButton from "$lib/components/GoogleButton.svelte";
-  import PasskeysButton from "$lib/components/PasskeysButton.svelte";
+  import PasskeyButton from "$lib/components/PasskeyButton.svelte";
   import InputFile from "$lib/components/InputFile.svelte";
   import { goto } from "$app/navigation";
   import { onMount } from "svelte";
@@ -85,7 +85,7 @@
 <br />
 <hr class="solid" />
 <br />
-<PasskeysButton isSignUp={true} />
+<PasskeyButton isSignUp={true} />
 <br />
 <hr class="solid" />
 <br />
