@@ -4,17 +4,15 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 
-	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/store"
 )
 
 type InMem struct {
-	// TODO: it would be nice to have a mutex here
-	// TODO: use pointers to avoid copying
-	users    *store.Store[string, PasskeyUser]
-	sessions *store.Store[string, webauthn.SessionData]
-
-	log Logger
+	sessions *store.Store[string, LocalSession]
+	log      Logger
+	app      *pocketbase.PocketBase
 }
 
 func (i *InMem) GenSessionID() (string, error) {
@@ -28,23 +26,22 @@ func (i *InMem) GenSessionID() (string, error) {
 
 }
 
-func NewInMem(log Logger) *InMem {
-
+func NewInMem(log Logger, app *pocketbase.PocketBase) *InMem {
 	return &InMem{
-		users:    store.New[string, PasskeyUser](nil),
-		sessions: store.New[string, webauthn.SessionData](nil),
+		sessions: store.New[string, LocalSession](nil),
 		log:      log,
+		app:      app,
 	}
 }
 
-func (i *InMem) GetSession(token string) (webauthn.SessionData, bool) {
+func (i *InMem) GetSession(token string) (LocalSession, bool) {
 	i.log.Printf("[DEBUG] GetSession: %v", i.sessions.Get(token))
 	val, ok := i.sessions.GetOk(token)
 
 	return val, ok
 }
 
-func (i *InMem) SaveSession(token string, data webauthn.SessionData) {
+func (i *InMem) SaveSession(token string, data LocalSession) {
 	i.log.Printf("[DEBUG] SaveSession: %s - %v", token, data)
 	i.sessions.Set(token, data)
 }
@@ -54,22 +51,46 @@ func (i *InMem) DeleteSession(token string) {
 	i.sessions.Remove(token)
 }
 
-func (i *InMem) GetOrCreateUser(userName string) PasskeyUser {
-	i.log.Printf("[DEBUG] GetOrCreateUser: %v", userName)
-	if _, ok := i.users.GetOk(userName); !ok {
-		i.log.Printf("[DEBUG] GetOrCreateUser: creating new user: %v", userName)
-		i.users.Set(userName, &User{
-			ID:          []byte(userName),
-			DisplayName: userName,
-			Name:        userName,
-		})
+func (i *InMem) GetOrCreateUser(email string) (PasskeyUser, error) {
+	i.log.Printf("[DEBUG] GetOrCreateUser: %v", email)
+
+	_, err := i.app.FindFirstRecordByData("users", "email", email)
+	if err != nil {
+		collection, err := i.app.FindCollectionByNameOrId("users")
+		if err != nil {
+			return nil, err
+		}
+
+		record := core.NewRecord(collection)
+
+		record.Set("email", email)
+		record.Set("name", email)
+		record.SetPassword("Lorem ipsum")
+
+		err = i.app.Save(record)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	return i.users.Get(userName)
+	userRecord, userErr := i.app.FindFirstRecordByData("users", "email", email)
+	if userErr != nil {
+		return nil, userErr
+	}
+
+	user := &User{
+		ID:          []byte(email),
+		DisplayName: userRecord.GetString("name"),
+		Name:        userRecord.GetString("name"),
+		app:         i.app,
+	}
+
+	return user, nil
+
 }
 
 func (i *InMem) SaveUser(user PasskeyUser) {
-	i.log.Printf("[DEBUG] SaveUser: %v", user.WebAuthnName())
-	i.log.Printf("[DEBUG] SaveUser: %v", user)
-	i.users.Set(user.WebAuthnName(), user)
+	//i.log.Printf("[DEBUG] SaveUser: %v", user.WebAuthnName())
+	//i.log.Printf("[DEBUG] SaveUser: %v", user)
+	//i.users.Set(user.WebAuthnName(), user)
 }

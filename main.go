@@ -12,7 +12,6 @@ import (
 	"os"
 	"reflect"
 	"strconv"
-	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/pocketbase/pocketbase"
@@ -74,9 +73,10 @@ func main() {
 	}
 
 	l = log.Default()
-	datastore = NewInMem(l)
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
+
+		datastore = NewInMem(l, app)
 
 		if !se.Router.HasRoute(http.MethodGet, "/{path...}") {
 			se.Router.GET("/{path...}", apis.Static(ui.DistDirFS, indexFallback)).
@@ -200,12 +200,15 @@ func main() {
 
 			app.Logger().Info("begin registration ----------------------\\")
 
-			username, err := getUsername(e)
+			email, err := getEmail(e)
 			if err != nil {
 				return e.BadRequestError("[ERRO] can't get user name: %s", err.Error())
 			}
 
-			user := datastore.GetOrCreateUser(username)
+			user, err := datastore.GetOrCreateUser(email)
+			if err != nil {
+				return e.BadRequestError("[ERRO] can't get user name: %s", err.Error())
+			}
 
 			options, session, err := webAuthn.BeginRegistration(user)
 			if err != nil {
@@ -217,7 +220,10 @@ func main() {
 				return e.BadRequestError("[ERRO] can't generate session id: %s", err.Error())
 			}
 
-			datastore.SaveSession(t, *session)
+			datastore.SaveSession(t, LocalSession{
+				SessionData: *session,
+				Email:       email,
+			})
 
 			e.Response.Header().Set("Session-Key", t)
 
@@ -239,7 +245,10 @@ func main() {
 				return e.BadRequestError("[ERRO] can't get session id: %s from datastore", err.Error())
 			}
 
-			user := datastore.GetOrCreateUser(string(session.UserID))
+			user, err := datastore.GetOrCreateUser(session.Email)
+			if err != nil {
+				return e.BadRequestError("[ERRO] can't get user id: %s", err.Error())
+			}
 
 			app.Logger().Info("user %s ----------------------/", "user", user.WebAuthnDisplayName())
 
@@ -251,7 +260,7 @@ func main() {
 
 			app.Logger().Info("rawId %s ----------------------/", "rawId", ccr.PublicKeyCredential.RawID)
 
-			credential, err := webAuthn.FinishRegistration(user, session, e.Request)
+			credential, err := webAuthn.FinishRegistration(user, session.SessionData, e.Request)
 			if err != nil {
 				msg := fmt.Sprintf("can't finish registration: %s", err.Error())
 
@@ -262,8 +271,10 @@ func main() {
 				return e.BadRequestError(msg, err.Error())
 			}
 
-			user.AddCredential(credential)
-			datastore.SaveUser(user)
+			err = user.AddCredential(credential, session.Email)
+			if err != nil {
+				return e.BadRequestError("Failed to add credential", err)
+			}
 
 			datastore.DeleteSession(sid)
 			e.SetCookie(&http.Cookie{
@@ -278,13 +289,20 @@ func main() {
 		se.Router.POST("/api/pb-experiments/passkey/loginStart", func(e *core.RequestEvent) error {
 			l.Printf("[INFO] begin login ----------------------\\")
 
-			username, err := getUsername(e)
+			email, err := getEmail(e)
 			if err != nil {
-				l.Printf("[ERRO]can't get user name: %s", err.Error())
-				panic(err)
+				msg := fmt.Sprintf("[ERRO]can't get user name: %s", err.Error())
+				return e.BadRequestError(msg, err.Error())
 			}
 
-			user := datastore.GetOrCreateUser(username) // Find the user
+			user, err := datastore.GetOrCreateUser(email) // Find the user
+
+			if err != nil {
+				msg := fmt.Sprintf("[ERRO]can't get user name: %s", err.Error())
+				return e.BadRequestError(msg, err.Error())
+			}
+
+			user.WebAuthnCredentials()
 
 			options, session, err := webAuthn.BeginLogin(user)
 			if err != nil {
@@ -298,7 +316,10 @@ func main() {
 			if err != nil {
 				return e.BadRequestError("[ERRO] can't generate session id: %s", err.Error())
 			}
-			datastore.SaveSession(t, *session)
+			datastore.SaveSession(t, LocalSession{
+				SessionData: *session,
+				Email:       email,
+			})
 
 			e.Response.Header().Set("Login-Key", t)
 			return e.JSON(http.StatusOK, options)
@@ -311,10 +332,16 @@ func main() {
 				return e.BadRequestError("[ERRO] can't get session id: %s", err.Error())
 			}
 			// Get the session data stored from the function above
-			session, _ := datastore.GetSession(sid) // FIXME: cover invalid session
+			session, err := datastore.GetSession(sid) // FIXME: cover invalid session
+			if !err {
+				return e.BadRequestError("[ERRO] can't get session id: %s", sid)
+			}
 
 			// In out example username == userID, but in real world it should be different
-			user := datastore.GetOrCreateUser(string(session.UserID)) // Get the user
+			user, err2 := datastore.GetOrCreateUser(session.Email) // Get the user
+			if err2 != nil {
+				return e.BadRequestError("[ERRO] can't get user: %s", err2.Error())
+			}
 
 			var ccr CredentialCreationResponse
 
@@ -324,9 +351,9 @@ func main() {
 
 			app.Logger().Info("rawId %s ----------------------/", "rawId", ccr.PublicKeyCredential.RawID)
 
-			credential, err := webAuthn.FinishLogin(user, session, e.Request)
-			if err != nil {
-				return e.BadRequestError("[ERRO] can't finish login: %s", err.Error())
+			credential, errLogin := webAuthn.FinishLogin(user, session.SessionData, e.Request)
+			if errLogin != nil {
+				return e.BadRequestError("[ERRO] can't finish login: %s", errLogin.Error())
 			}
 
 			// Handle credential.Authenticator.CloneWarning
@@ -334,32 +361,16 @@ func main() {
 				l.Printf("[WARN] can't finish login: %s", "CloneWarning")
 			}
 
-			// If login was successful, update the credential object
 			user.UpdateCredential(credential)
-			datastore.SaveUser(user)
 
-			// Delete the login session data
-			datastore.DeleteSession(sid)
-
-			// Add the new session cookie
-			t, err := datastore.GenSessionID()
-			if err != nil {
-				l.Printf("[ERRO] can't generate session id: %s", err.Error())
-
-				return e.BadRequestError("[ERRO] can't generate session id: %s", err.Error())
-			}
-
-			datastore.SaveSession(t, webauthn.SessionData{
-				Expires: time.Now().Add(time.Hour),
-			})
-			e.Response.Header().Set("Login-Key", t)
-
-			l.Printf("[INFO] finish login ----------------------/")
-
-			userRecord, err := app.FindRecordById("users", "a7d90iil825ptia")
-			if err != nil {
+			userRecord, recordErr := app.FindFirstRecordByData("users", "email", session.Email)
+			if recordErr != nil {
 				return e.BadRequestError("Mfa not found", err)
 			}
+
+			datastore.DeleteSession(sid)
+
+			l.Printf("[INFO] finish login ----------------------/")
 
 			return apis.RecordAuthResponse(e, userRecord, "passkeys", nil)
 		})
@@ -377,44 +388,48 @@ type UserTotp struct {
 	Passcode string `json:"passcode" form:"passcode"`
 }
 
+type LocalSession struct {
+	SessionData webauthn.SessionData
+	Email       string
+}
+
 type Logger interface {
-	Printf(format string, v ...interface{})
+	Printf(format string, v ...any)
 }
 
 type PasskeyUser interface {
 	webauthn.User
-	AddCredential(*webauthn.Credential)
-	UpdateCredential(*webauthn.Credential)
+	AddCredential(*webauthn.Credential, string) error
+	UpdateCredential(*webauthn.Credential) error
 }
 
 type PasskeyStore interface {
-	GetOrCreateUser(userName string) PasskeyUser
-	SaveUser(PasskeyUser)
+	GetOrCreateUser(email string) (PasskeyUser, error)
 	GenSessionID() (string, error)
-	GetSession(token string) (webauthn.SessionData, bool)
-	SaveSession(token string, data webauthn.SessionData)
+	GetSession(token string) (LocalSession, bool)
+	SaveSession(token string, data LocalSession)
 	DeleteSession(token string)
 }
 
 // JSONResponse is a helper function to send json response
-func JSONResponse(w http.ResponseWriter, data interface{}, status int) {
+func JSONResponse(w http.ResponseWriter, data any, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }
 
-// getUsername is a helper function to extract the username from json request
-func getUsername(e *core.RequestEvent) (string, error) {
-	type Username struct {
-		Username string `json:"username"`
+// getEmail is a helper function to extract the email from json request
+func getEmail(e *core.RequestEvent) (string, error) {
+	type User struct {
+		Email string `json:"email"`
 	}
 
-	var u Username
+	var u User
 	if err := e.BindBody(&u); err != nil {
 		return "", e.BadRequestError("Failed to read request data", err)
 	}
 
-	return u.Username, nil
+	return u.Email, nil
 
 }
 

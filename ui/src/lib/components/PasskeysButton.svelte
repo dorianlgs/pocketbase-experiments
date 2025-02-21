@@ -15,7 +15,7 @@
     try {
       loading = true;
 
-      const userName = "lol@gmail.com";
+      const email = "lol@gmail.com";
 
       if (isSignUp) {
         const response = await fetch(
@@ -23,7 +23,7 @@
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: userName }),
+            body: JSON.stringify({ email: email }),
           },
         );
 
@@ -68,7 +68,7 @@
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: userName }),
+            body: JSON.stringify({ email: email }),
           },
         );
         // Check if the login options are ok.
