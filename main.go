@@ -10,18 +10,18 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 
 	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/joho/godotenv"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/shujink0/pocketbase-experiments/ui"
 
 	"github.com/pquerna/otp/totp"
-
-	"github.com/joho/godotenv"
 )
 
 var (
@@ -35,10 +35,12 @@ var (
 
 func main() {
 
-	err := godotenv.Load()
+	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 	if err != nil {
-		panic("Error loading .env file")
+		log.Fatal(err)
 	}
+	environmentPath := filepath.Join(dir, ".env")
+	err = godotenv.Load(environmentPath)
 
 	totpIssuer := os.Getenv("TOTP_ISSUER")
 
@@ -198,8 +200,6 @@ func main() {
 
 		se.Router.POST("/api/pb-experiments/passkey/registerStart", func(e *core.RequestEvent) error {
 
-			app.Logger().Info("begin registration ----------------------\\")
-
 			email, err := getEmail(e)
 			if err != nil {
 				return e.BadRequestError("[ERRO] can't get user name: %s", err.Error())
@@ -237,8 +237,6 @@ func main() {
 				return e.BadRequestError("[ERRO] can't get session id: %s", err.Error())
 			}
 
-			app.Logger().Info("sid %s ----------------------/", "sid", sid)
-
 			session, ok := datastore.GetSession(sid)
 
 			if !ok {
@@ -250,15 +248,11 @@ func main() {
 				return e.BadRequestError("[ERRO] can't get user id: %s", err.Error())
 			}
 
-			app.Logger().Info("user %s ----------------------/", "user", user.WebAuthnDisplayName())
-
 			var ccr CredentialCreationResponse
 
 			if err := e.BindBody(&ccr); err != nil {
 				return e.BadRequestError("Failed to read request data", err)
 			}
-
-			app.Logger().Info("rawId %s ----------------------/", "rawId", ccr.PublicKeyCredential.RawID)
 
 			credential, err := webAuthn.FinishRegistration(user, session.SessionData, e.Request)
 			if err != nil {
@@ -282,12 +276,10 @@ func main() {
 				Value: "",
 			})
 
-			app.Logger().Info("finish registration ----------------------/")
 			return e.JSON(http.StatusOK, "Registration Success")
 		})
 
 		se.Router.POST("/api/pb-experiments/passkey/loginStart", func(e *core.RequestEvent) error {
-			l.Printf("[INFO] begin login ----------------------\\")
 
 			email, err := getEmail(e)
 			if err != nil {
@@ -301,8 +293,6 @@ func main() {
 				msg := fmt.Sprintf("[ERRO]can't get user name: %s", err.Error())
 				return e.BadRequestError(msg, err.Error())
 			}
-
-			user.WebAuthnCredentials()
 
 			options, session, err := webAuthn.BeginLogin(user)
 			if err != nil {
@@ -349,8 +339,6 @@ func main() {
 				return e.BadRequestError("Failed to read request data", err)
 			}
 
-			app.Logger().Info("rawId %s ----------------------/", "rawId", ccr.PublicKeyCredential.RawID)
-
 			credential, errLogin := webAuthn.FinishLogin(user, session.SessionData, e.Request)
 			if errLogin != nil {
 				return e.BadRequestError("[ERRO] can't finish login: %s", errLogin.Error())
@@ -369,8 +357,6 @@ func main() {
 			}
 
 			datastore.DeleteSession(sid)
-
-			l.Printf("[INFO] finish login ----------------------/")
 
 			return apis.RecordAuthResponse(e, userRecord, "passkeys", nil)
 		})

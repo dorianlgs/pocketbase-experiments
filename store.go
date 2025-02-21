@@ -65,7 +65,14 @@ func (i *InMem) GetOrCreateUser(email string) (PasskeyUser, error) {
 
 		record.Set("email", email)
 		record.Set("name", email)
-		record.SetPassword("Lorem ipsum")
+
+		generatedPassword := make([]byte, 20)
+		_, randErr := rand.Reader.Read(generatedPassword)
+		if randErr != nil {
+			return nil, randErr
+		}
+
+		record.SetPassword(string(generatedPassword))
 
 		err = i.app.Save(record)
 		if err != nil {
