@@ -1,4 +1,4 @@
-module github.com/shujink0/pocketbase-experiments
+module github.com/dorianlgs/pocketbase-experiments
 
 go 1.24.0
 
