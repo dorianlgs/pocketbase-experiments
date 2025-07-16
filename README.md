@@ -21,11 +21,6 @@ GOOS=linux GOARCH=amd64 go build -ldflags "-s -w"
 ./pocketbase-experiments serve
 ```
 
-## Copy to Server
-```bash
-scp pocketbase-experiments root@208.117.87.150:/var/www/pb/
-```
-
 ## Module creation
 ```bash
 go mod init github.com/dorianlgs/pocketbase-experiments
