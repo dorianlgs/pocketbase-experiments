@@ -28,7 +28,7 @@ scp pocketbase-experiments root@208.117.87.150:/var/www/pb/
 
 ## Module creation
 ```bash
-go mod init github.com/shujink0/pocketbase-experiments
+go mod init github.com/dorianlgs/pocketbase-experiments
 ```
 
 ## Update All Go Modules
