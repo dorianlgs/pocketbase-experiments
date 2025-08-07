@@ -12,11 +12,12 @@
   - Multi-factor authentication support
 
 - **🛠️ Modern Tech Stack**
-  - **Backend**: Go with PocketBase framework
+  - **Backend**: Go with PocketBase framework (refactored & modular)
   - **Frontend**: SvelteKit 2.x with TypeScript
   - **Database**: SQLite with PocketBase ORM
   - **Styling**: TailwindCSS + DaisyUI
   - **Build**: Embedded frontend with Go embed
+  - **Testing**: Comprehensive Go test suite
 
 - **📱 User Experience**
   - Responsive design with mobile-first approach
@@ -79,9 +80,18 @@ go mod tidy
 # Run development server
 go run . serve
 
+# Run tests
+go test -v
+
+# Run tests with coverage
+go test -v -cover
+
 # Update all Go modules
 go get -u -t ./...
 go mod tidy
+
+# Build and test
+go build -o /dev/null . && go test -v
 ```
 
 ### Frontend Commands (ui/ directory)
@@ -136,20 +146,56 @@ npm run format_check
 
 ### Project Structure
 ```
-├── main.go              # Main application and API routes
-├── models.go            # User models and WebAuthn interface
-├── store.go            # In-memory session store
-├── ui/                 # SvelteKit frontend
-│   ├── src/routes/     # Application routes
-│   ├── src/lib/        # Components and utilities
-│   └── embed.go        # Frontend embedding
-└── pb_data/            # PocketBase database and storage
+├── main.go              # Main application entry point & routing
+├── config.go            # Environment configuration management  
+├── auth.go              # Authentication service & WebAuthn setup
+├── types.go             # Type definitions & interfaces
+├── handlers_totp.go     # TOTP-related HTTP handlers
+├── handlers_webauthn.go # WebAuthn-related HTTP handlers
+├── utils.go             # Utility functions
+├── models.go            # User models & WebAuthn interface
+├── store.go             # In-memory session store
+├── core_test.go         # Comprehensive test suite
+├── ui/                  # SvelteKit frontend
+│   ├── src/routes/      # Application routes
+│   ├── src/lib/         # Components and utilities
+│   └── embed.go         # Frontend embedding
+└── pb_data/             # PocketBase database and storage
 ```
 
 ### Database Collections
 - **users**: User accounts with TOTP secrets
 - **credentials**: WebAuthn credentials
 - **_mfas**: Multi-factor authentication records
+
+### Code Architecture & Quality
+
+**🔧 Refactored Codebase:**
+- **Modular Design**: Separated concerns into dedicated files for better maintainability
+- **Clean Architecture**: Service layer pattern with dependency injection
+- **Type Safety**: Comprehensive type definitions and interfaces
+- **Error Handling**: Standardized error responses and proper error propagation
+
+**🧪 Testing Suite:**
+- **Unit Tests**: Comprehensive test coverage for all core modules
+- **Edge Cases**: Tests for invalid inputs, missing data, and error conditions  
+- **Data Integrity**: Serialization/deserialization round-trip testing
+- **Security**: Session ID uniqueness and cryptographic validation
+- **Configuration**: Environment setup and validation testing
+
+**Test Coverage:**
+```bash
+# Run the full test suite
+go test -v
+
+# Key test areas:
+✅ Configuration management & environment handling
+✅ Authentication service & WebAuthn initialization
+✅ Session management with secure session IDs
+✅ Data structures & JSON serialization
+✅ Base64 URL encoding for WebAuthn compliance
+✅ Error handling & edge cases
+```
 
 ## 🚀 Production Deployment
 
@@ -179,11 +225,24 @@ HOST="yourdomain.com"
 
 ## 🔧 Development Notes
 
+**Architecture:**
+- **Modular Backend**: Refactored Go code with clear separation of concerns
+- **Service Layer**: Authentication service with dependency injection pattern
+- **Handler Organization**: Separate handlers for TOTP and WebAuthn functionality
+- **Configuration Management**: Environment-based config with validation
+
+**Technical Details:**
 - The frontend is automatically built and embedded into the Go binary via `go:generate`
 - WebAuthn sessions are stored in-memory (consider Redis for production scaling)
 - PocketBase handles user management, while custom routes handle advanced auth
 - Static files are served with gzip compression
 - SPA fallback ensures proper routing for client-side navigation
+
+**Quality Assurance:**
+- Comprehensive test suite ensures code reliability
+- All core functionality is unit tested
+- Error handling is standardized across the application
+- Session management includes cryptographic security validation
 
 ## 📚 API Documentation
 
@@ -196,8 +255,25 @@ For detailed API usage examples, see the frontend implementation in `ui/src/lib/
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run tests and linting
-5. Submit a pull request
+4. **Run tests**: `go test -v` (backend) and `npm test` (frontend)
+5. **Run linting**: `go vet ./...` (backend) and `npm run lint` (frontend)
+6. Ensure all tests pass and code follows project patterns
+7. Submit a pull request
+
+### Development Workflow
+```bash
+# Backend development
+go mod tidy                    # Install dependencies
+go test -v                     # Run tests
+go build -o /dev/null .        # Verify build
+go run . serve                 # Start development server
+
+# Frontend development (in ui/ directory)
+npm install                    # Install dependencies  
+npm run dev                    # Start dev server with hot reload
+npm test                       # Run frontend tests
+npm run lint                   # Check code style
+```
 
 ## 📄 License
 
