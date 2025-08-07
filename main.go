@@ -1,64 +1,26 @@
 package main
 
 import (
-	"bytes"
-	"encoding/base32"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"image/png"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"reflect"
-	"strconv"
-	"strings"
 
 	"github.com/dorianlgs/pocketbase-experiments/ui"
-	"github.com/go-webauthn/webauthn/webauthn"
-	"github.com/joho/godotenv"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
-
-	"github.com/pquerna/otp/totp"
-)
-
-var (
-	webAuthn *webauthn.WebAuthn
-	err      error
-
-	datastore PasskeyStore
-	//sessions  SessionStore
-	l Logger
 )
 
 func main() {
-
-	isDevEnv := strings.HasPrefix(os.Args[0], os.TempDir())
-
-	if isDevEnv {
-		err = godotenv.Load()
-	} else {
-		dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
-		if err != nil {
-			log.Fatal(err)
-		}
-		environmentPath := filepath.Join(dir, ".env.production")
-
-		fmt.Println(environmentPath)
-		err = godotenv.Load(environmentPath)
+	// Load configuration
+	config, err := LoadConfig()
+	if err != nil {
+		log.Fatal("Failed to load config:", err)
 	}
 
-	totpIssuer := os.Getenv("TOTP_ISSUER")
-
-	if totpIssuer == "" {
-		panic("env TOTP_ISSUER not found")
-	}
-
+	// Initialize PocketBase app
 	app := pocketbase.New()
 
+	// Add indexFallback flag for SPA routing
 	var indexFallback bool
 	app.RootCmd.PersistentFlags().BoolVar(
 		&indexFallback,
@@ -67,421 +29,49 @@ func main() {
 		"fallback the request to index.html on missing static path, e.g. when pretty urls are used with SPA",
 	)
 
-	proto := os.Getenv("PROTO")
-	host := os.Getenv("HOST")
-
-	var origin string
-
-	if isDevEnv {
-		port := os.Getenv("PORT")
-		origin = fmt.Sprintf("%s://%s%s", proto, host, port)
-	} else {
-		origin = fmt.Sprintf("%s://%s", proto, host)
+	// Initialize services
+	logger := log.Default()
+	authService, err := NewAuthService(config, logger)
+	if err != nil {
+		log.Fatal("Failed to initialize auth service:", err)
 	}
-
-	wconfig := &webauthn.Config{
-		RPDisplayName: "PB Expetiments WebAuthn", // Display Name for your site
-		RPID:          host,                      // Generally the FQDN for your site
-		RPOrigins:     []string{origin},          // The origin URLs allowed for WebAuthn
-	}
-
-	if webAuthn, err = webauthn.New(wconfig); err != nil {
-		fmt.Printf("[FATA] %s", err.Error())
-		os.Exit(1)
-	}
-
-	l = log.Default()
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
+		// Initialize datastore
+		datastore := NewInMem(logger, app)
+		authService.SetDatastore(datastore)
 
-		datastore = NewInMem(l, app)
-
+		// Setup static file serving
 		if !se.Router.HasRoute(http.MethodGet, "/{path...}") {
 			se.Router.GET("/{path...}", apis.Static(ui.DistDirFS, indexFallback)).
 				Bind(apis.Gzip())
 		}
 
-		se.Router.GET("/api/pb-experiments/get-qr", func(e *core.RequestEvent) error {
-
-			info, err := e.RequestInfo()
-			userId := info.Query["userId"]
-
-			str_regenerate := info.Query["regenerate"]
-
-			regenerate, err := strconv.ParseBool(str_regenerate)
-			if err != nil {
-				return e.BadRequestError("regenerate not bool", nil)
-			}
-
-			if userId == "" {
-				return e.BadRequestError("userId required", nil)
-			}
-
-			record, err := app.FindRecordById("users", userId)
-			if err != nil {
-				return err
-			}
-
-			canAccess, err := e.App.CanAccessRecord(record, info, record.Collection().ViewRule)
-			if !canAccess {
-				return e.ForbiddenError("", err)
-			}
-
-			opts := totp.GenerateOpts{
-				Issuer:      totpIssuer,
-				AccountName: record.Email(),
-			}
-
-			if !regenerate {
-				secretBytes, err := base32.StdEncoding.DecodeString(record.GetString("totpSecret"))
-				if err != nil {
-					return e.BadRequestError("Error decoding totp secret", err)
-				}
-				opts.Secret = secretBytes
-			}
-
-			key, err := totp.Generate(opts)
-			if err != nil {
-				return e.BadRequestError("Error generating otp", err)
-			}
-
-			if regenerate {
-				record.Set("totpSecret", key.Secret())
-				record.Set("multiFactorAuth", true)
-
-				err = app.Save(record)
-				if err != nil {
-					return e.BadRequestError("Error saving otp secret", err)
-				}
-			}
-
-			var buf bytes.Buffer
-			img, err := key.Image(200, 200)
-			if err != nil {
-				return e.BadRequestError("Error generating otp image", err)
-			}
-
-			err = png.Encode(&buf, img)
-
-			if err != nil {
-				return e.BadRequestError("Error encoding image", err)
-			}
-
-			return e.Blob(http.StatusOK, "image/png", buf.Bytes())
-		}).Bind(apis.RequireAuth())
-
-		se.Router.POST("/api/pb-experiments/totp-login", func(e *core.RequestEvent) error {
-			data := UserTotp{}
-			if err := e.BindBody(&data); err != nil {
-				return e.BadRequestError("Failed to read request data", err)
-			}
-
-			if data.MfaId == "" {
-				return e.BadRequestError("mfaId required", nil)
-			}
-
-			if data.Passcode == "" {
-				return e.BadRequestError("passcode required", nil)
-			}
-
-			record, err := app.FindRecordById("_mfas", data.MfaId)
-			if err != nil {
-				return e.BadRequestError("Mfa not found", err)
-			}
-
-			userId := record.GetString("recordRef")
-
-			if userId == "" {
-				return e.BadRequestError("Column not found", err)
-			}
-
-			userRecord, err := app.FindRecordById("users", userId)
-			if err != nil {
-				return e.BadRequestError("Mfa not found", err)
-			}
-
-			secret := userRecord.GetString("totpSecret")
-
-			if secret == "" {
-				return e.BadRequestError("Secret not found", err)
-			}
-
-			valid := totp.Validate(data.Passcode, secret)
-			if !valid {
-				return e.UnauthorizedError("Invalid passcode", err)
-			}
-
-			return apis.RecordAuthResponse(e, userRecord, "totp", nil)
-		})
-
-		se.Router.POST("/api/pb-experiments/passkey/registerStart", func(e *core.RequestEvent) error {
-
-			email, err := getEmail(e)
-			if err != nil {
-				return e.BadRequestError("[ERRO] can't get user name: %s", err.Error())
-			}
-
-			user, err := datastore.GetOrCreateUser(email)
-			if err != nil {
-				return e.BadRequestError("[ERRO] can't get user name: %s", err.Error())
-			}
-
-			options, session, err := webAuthn.BeginRegistration(user)
-			if err != nil {
-				return e.BadRequestError("can't begin registration: %s", err.Error())
-			}
-
-			t, err := datastore.GenSessionID()
-			if err != nil {
-				return e.BadRequestError("[ERRO] can't generate session id: %s", err.Error())
-			}
-
-			datastore.SaveSession(t, LocalSession{
-				SessionData: *session,
-				Email:       email,
-			})
-
-			e.Response.Header().Set("Session-Key", t)
-
-			return e.JSON(http.StatusOK, options)
-		})
-
-		se.Router.POST("/api/pb-experiments/passkey/registerFinish", func(e *core.RequestEvent) error {
-
-			sid := e.Request.Header.Get("Session-Key")
-			if err != nil {
-				return e.BadRequestError("[ERRO] can't get session id: %s", err.Error())
-			}
-
-			session, ok := datastore.GetSession(sid)
-
-			if !ok {
-				return e.BadRequestError("[ERRO] can't get session id: %s from datastore", err.Error())
-			}
-
-			user, err := datastore.GetOrCreateUser(session.Email)
-			if err != nil {
-				return e.BadRequestError("[ERRO] can't get user id: %s", err.Error())
-			}
-
-			var ccr CredentialCreationResponse
-
-			if err := e.BindBody(&ccr); err != nil {
-				return e.BadRequestError("Failed to read request data", err)
-			}
-
-			credential, err := webAuthn.FinishRegistration(user, session.SessionData, e.Request)
-			if err != nil {
-				msg := fmt.Sprintf("can't finish registration: %s", err.Error())
-
-				e.SetCookie(&http.Cookie{
-					Name:  "sid",
-					Value: "",
-				})
-				return e.BadRequestError(msg, err.Error())
-			}
-
-			err = user.AddCredential(credential, session.Email)
-			if err != nil {
-				return e.BadRequestError("Failed to add credential", err)
-			}
-
-			datastore.DeleteSession(sid)
-			e.SetCookie(&http.Cookie{
-				Name:  "sid",
-				Value: "",
-			})
-
-			return e.JSON(http.StatusOK, "Registration Success")
-		})
-
-		se.Router.POST("/api/pb-experiments/passkey/loginStart", func(e *core.RequestEvent) error {
-
-			email, err := getEmail(e)
-			if err != nil {
-				msg := fmt.Sprintf("[ERRO]can't get user name: %s", err.Error())
-				return e.BadRequestError(msg, err.Error())
-			}
-
-			user, err := datastore.GetOrCreateUser(email) // Find the user
-
-			if err != nil {
-				msg := fmt.Sprintf("[ERRO]can't get user name: %s", err.Error())
-				return e.BadRequestError(msg, err.Error())
-			}
-
-			options, session, err := webAuthn.BeginLogin(user)
-			if err != nil {
-				msg := fmt.Sprintf("can't begin login: %s", err.Error())
-				l.Printf("[ERRO] %s", msg)
-				return e.BadRequestError(msg, err.Error())
-			}
-
-			// Make a session key and store the sessionData values
-			t, err := datastore.GenSessionID()
-			if err != nil {
-				return e.BadRequestError("[ERRO] can't generate session id: %s", err.Error())
-			}
-			datastore.SaveSession(t, LocalSession{
-				SessionData: *session,
-				Email:       email,
-			})
-
-			e.Response.Header().Set("Login-Key", t)
-			return e.JSON(http.StatusOK, options)
-		})
-
-		se.Router.POST("/api/pb-experiments/passkey/loginFinish", func(e *core.RequestEvent) error {
-			// Get the session key from cookie
-			sid := e.Request.Header.Get("Login-Key")
-			if err != nil {
-				return e.BadRequestError("[ERRO] can't get session id: %s", err.Error())
-			}
-			// Get the session data stored from the function above
-			session, err := datastore.GetSession(sid) // FIXME: cover invalid session
-			if !err {
-				return e.BadRequestError("[ERRO] can't get session id: %s", sid)
-			}
-
-			// In out example username == userID, but in real world it should be different
-			user, err2 := datastore.GetOrCreateUser(session.Email) // Get the user
-			if err2 != nil {
-				return e.BadRequestError("[ERRO] can't get user: %s", err2.Error())
-			}
-
-			var ccr CredentialCreationResponse
-
-			if err := e.BindBody(&ccr); err != nil {
-				return e.BadRequestError("Failed to read request data", err)
-			}
-
-			credential, errLogin := webAuthn.FinishLogin(user, session.SessionData, e.Request)
-			if errLogin != nil {
-				return e.BadRequestError("[ERRO] can't finish login: %s", errLogin.Error())
-			}
-
-			// Handle credential.Authenticator.CloneWarning
-			if credential.Authenticator.CloneWarning {
-				l.Printf("[WARN] can't finish login: %s", "CloneWarning")
-			}
-
-			user.UpdateCredential(credential)
-
-			userRecord, recordErr := app.FindFirstRecordByData("users", "email", session.Email)
-			if recordErr != nil {
-				return e.BadRequestError("Mfa not found", err)
-			}
-
-			datastore.DeleteSession(sid)
-
-			return apis.RecordAuthResponse(e, userRecord, "passkeys", nil)
-		})
+		// Setup route handlers
+		setupRoutes(se, app, authService)
 
 		return se.Next()
 	})
 
+	// Start the application
 	if err := app.Start(); err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to start application:", err)
 	}
 }
 
-type UserTotp struct {
-	MfaId    string `json:"mfaId" form:"mfaId"`
-	Passcode string `json:"passcode" form:"passcode"`
-}
+// setupRoutes configures all API routes
+func setupRoutes(se *core.ServeEvent, app *pocketbase.PocketBase, authService *AuthService) {
+	// Initialize handlers
+	totpHandlers := NewTOTPHandlers(app, authService)
+	webauthnHandlers := NewWebAuthnHandlers(app, authService)
 
-type LocalSession struct {
-	SessionData webauthn.SessionData
-	Email       string
-}
+	// TOTP routes
+	se.Router.GET("/api/pb-experiments/get-qr", totpHandlers.HandleGetQR).Bind(apis.RequireAuth())
+	se.Router.POST("/api/pb-experiments/totp-login", totpHandlers.HandleTOTPLogin)
 
-type Logger interface {
-	Printf(format string, v ...any)
-}
-
-type PasskeyUser interface {
-	webauthn.User
-	AddCredential(*webauthn.Credential, string) error
-	UpdateCredential(*webauthn.Credential) error
-}
-
-type PasskeyStore interface {
-	GetOrCreateUser(email string) (PasskeyUser, error)
-	GenSessionID() (string, error)
-	GetSession(token string) (LocalSession, bool)
-	SaveSession(token string, data LocalSession)
-	DeleteSession(token string)
-}
-
-// JSONResponse is a helper function to send json response
-func JSONResponse(w http.ResponseWriter, data any, status int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
-}
-
-// getEmail is a helper function to extract the email from json request
-func getEmail(e *core.RequestEvent) (string, error) {
-	type User struct {
-		Email string `json:"email"`
-	}
-
-	var u User
-	if err := e.BindBody(&u); err != nil {
-		return "", e.BadRequestError("Failed to read request data", err)
-	}
-
-	return u.Email, nil
-
-}
-
-type CredentialCreationResponse struct {
-	PublicKeyCredential
-}
-
-type PublicKeyCredential struct {
-	RawID URLEncodedBase64 `json:"rawId"`
-}
-
-type URLEncodedBase64 []byte
-
-func (e URLEncodedBase64) String() string {
-	return base64.RawURLEncoding.EncodeToString(e)
-}
-
-// UnmarshalJSON base64 decodes a URL-encoded value, storing the result in the
-// provided byte slice.
-func (e *URLEncodedBase64) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(data, []byte("null")) {
-		return nil
-	}
-
-	// TODO: Investigate this line. It is commented as trimming the leading spaces but appears to trim the leading and trailing double quotes instead.
-	// Trim the leading spaces.
-	data = bytes.Trim(data, "\"")
-
-	// Trim the trailing equal characters.
-	data = bytes.TrimRight(data, "=")
-
-	out := make([]byte, base64.RawURLEncoding.DecodedLen(len(data)))
-
-	n, err := base64.RawURLEncoding.Decode(out, data)
-	if err != nil {
-		return err
-	}
-
-	v := reflect.ValueOf(e).Elem()
-	v.SetBytes(out[:n])
-
-	return nil
-}
-
-// MarshalJSON base64 encodes a non URL-encoded value, storing the result in the
-// provided byte slice.
-func (e URLEncodedBase64) MarshalJSON() ([]byte, error) {
-	if e == nil {
-		return []byte("null"), nil
-	}
-
-	return []byte(`"` + base64.RawURLEncoding.EncodeToString(e) + `"`), nil
+	// WebAuthn routes
+	se.Router.POST("/api/pb-experiments/passkey/registerStart", webauthnHandlers.HandleRegisterStart)
+	se.Router.POST("/api/pb-experiments/passkey/registerFinish", webauthnHandlers.HandleRegisterFinish)
+	se.Router.POST("/api/pb-experiments/passkey/loginStart", webauthnHandlers.HandleLoginStart)
+	se.Router.POST("/api/pb-experiments/passkey/loginFinish", webauthnHandlers.HandleLoginFinish)
 }
