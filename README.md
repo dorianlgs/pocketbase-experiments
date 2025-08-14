@@ -277,4 +277,4 @@ npm run lint                   # Check code style
 
 ## 📄 License
 
-This project is open source. Please check the license file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
