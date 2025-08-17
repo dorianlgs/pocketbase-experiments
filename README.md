@@ -278,3 +278,5 @@ npm run lint                   # Check code style
 ## 📄 License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+<!-- Cache refresh trigger -->
