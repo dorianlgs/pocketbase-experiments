@@ -6,7 +6,7 @@ require (
 	github.com/go-webauthn/webauthn v0.13.4
 	github.com/joho/godotenv v1.5.1
 	github.com/pocketbase/dbx v1.11.0
-	github.com/pocketbase/pocketbase v0.29.2
+	github.com/pocketbase/pocketbase v0.29.3
 	github.com/pquerna/otp v1.5.0
 	github.com/stretchr/testify v1.10.0
 )
@@ -41,7 +41,7 @@ require (
 	github.com/spf13/pflag v1.0.7 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.41.0 // indirect
-	golang.org/x/exp v0.0.0-20250813145105-42675adae3e6 // indirect
+	golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b // indirect
 	golang.org/x/image v0.30.0 // indirect
 	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
