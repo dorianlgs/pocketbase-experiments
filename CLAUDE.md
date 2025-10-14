@@ -105,3 +105,33 @@ The frontend is automatically built and embedded into the Go binary using `go:ge
 - SvelteKit uses grouped routes: `(marketing)` for public pages, `(admin)` for protected areas
 - Static adapter configured for deployment as static files
 - Fallback to `404.html` for SPA routing
+
+## Security
+
+### Security Documentation
+The project maintains comprehensive security documentation in **SECURITY.md**:
+- Vulnerability reporting process
+- Known security issues and mitigations
+- Security best practices for authentication, database, network, and file uploads
+- Production deployment security checklist
+- Dependency management guidelines
+
+### Known Vulnerabilities
+
+**CVE-2023-36308 (github.com/disintegration/imaging)**
+- **Status**: Known, mitigated (no patch available)
+- **Impact**: Low - TIFF panic vulnerability in indirect dependency via PocketBase
+- **Mitigation**: MIME type restrictions in `pb_schema.json` prevent TIFF uploads
+- **Allowed formats**: JPEG, PNG, SVG, GIF, WebP only
+- **Details**: See SECURITY.md for full analysis
+
+### File Upload Security
+All file upload fields have explicit MIME type restrictions defined in `pb_schema.json`:
+- Avatar field (users collection): Limited to image/jpeg, image/png, image/svg+xml, image/gif, image/webp
+- No TIFF support in any collection (mitigates CVE-2023-36308)
+
+### Session Security
+- WebAuthn sessions use cryptographically secure random token generation
+- Session IDs are unique and validated in tests (see `core_test.go`)
+- Auth tokens configurable per collection (default: 7 days for users)
+- Password reset tokens expire after 30 minutes

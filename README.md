@@ -244,6 +244,17 @@ HOST="yourdomain.com"
 - Error handling is standardized across the application
 - Session management includes cryptographic security validation
 
+## 🔒 Security
+
+This project implements multiple layers of security for authentication and data protection. For detailed security information, known vulnerabilities, and best practices, see [SECURITY.md](SECURITY.md).
+
+**Key Security Features:**
+- WebAuthn/FIDO2 passwordless authentication
+- TOTP-based multi-factor authentication
+- Secure session management with cryptographic tokens
+- MIME type validation for file uploads
+- Encrypted credential storage
+
 ## 📚 API Documentation
 
 All custom authentication endpoints require proper headers and CORS handling. WebAuthn endpoints use session tokens for state management during the authentication ceremony.
