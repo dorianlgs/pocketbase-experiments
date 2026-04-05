@@ -10,7 +10,6 @@ If you discover a security vulnerability in this project, please report it by cr
 - Potential impact
 - Suggested fix (if available)
 
-
 We will acknowledge receipt of your report within 48 hours and provide a detailed response within 7 days.
 
 ## Supported Versions
